@@ -222,18 +222,27 @@ jobs:
         working-directory: ${{ env.KERNEL_NAME }}
         if: ${{ env.withRoot == 'ksun' }}
         run: |
-          # Remove old KSU dirs, then install latest tagged KernelSU-Next
+          # Fix P5: remove stale symlink + old dirs before setup
           rm -rf KernelSU KernelSU-Next drivers/kernelsu
-          # No argument = setup.sh auto-checkouts latest tag
+
+          # Run setup.sh (clones KernelSU-Next/KernelSU-Next, wires Makefile/Kconfig)
           curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s
 
-          # v3.2.0-legacy Kbuild requires ksu_handle_sys_reboot in kernel/reboot.c
-          # (begonia has KPROBES disabled so manual hook mode is used, which checks reboot.c)
+          # Fix P1: setup.sh with no arg picks v3.2.0 (non-legacy/GKI) via git describe.
+          # We need the -legacy tag for 4.14 non-GKI kernels. Find and checkout latest -legacy tag.
+          LATEST_LEGACY=$(git -C KernelSU-Next tag | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-legacy$' | sort -V | tail -1)
+          echo "Switching KernelSU-Next to legacy tag: ${LATEST_LEGACY}"
+          git -C KernelSU-Next checkout "$LATEST_LEGACY"
+
+          # Fix P3: v*-legacy Kbuild checks for ksu_handle_sys_reboot in kernel/reboot.c.
+          # begonia has CONFIG_KPROBES=n so manual hook mode is active and this check is mandatory.
           python3 ${{ github.workspace }}/scripts/patch_reboot_ksu.py
 
-          KSU_VERSION=$(cat KernelSU-Next/kernel/.version 2>/dev/null || cat KernelSU/kernel/.version 2>/dev/null || cat KernelSU/.version 2>/dev/null || echo "unknown")
+          # Fix P2: .version file does not exist — version is computed from git commit count at Kbuild time.
+          KSU_GIT_COUNT=$(git -C KernelSU-Next rev-list --count HEAD 2>/dev/null || echo "0")
+          KSU_VERSION=$((30000 + KSU_GIT_COUNT + 150))
           echo "ROOT_VERSION=KSUN-v${KSU_VERSION}" >> $GITHUB_OUTPUT
-          echo "KernelSU-Next version: ${KSU_VERSION}"
+          echo "KernelSU-Next tag: ${LATEST_LEGACY} | computed version: ${KSU_VERSION}"
 
       - name: "🥷 Add SUSFS patches"
         working-directory: ${{ env.KERNEL_NAME }}
@@ -295,6 +304,27 @@ jobs:
         run: |
           echo "PATH Variable: $PATH"
           make ${{ env.args }}
+
+      - name: "✅ Verify KSU compiled into kernel"
+        working-directory: ${{ env.KERNEL_NAME }}
+        if: ${{ env.withRoot == 'ksun' }}
+        env:
+          args: ${{ steps.generate-args.outputs.args }}
+          arch: ${{ steps.generate-args.outputs.ARCH }}
+        run: |
+          SYSMAP="${{ env.OUT_DIR }}/System.map"
+          if [ ! -f "$SYSMAP" ]; then
+            echo "ERROR: System.map not found at $SYSMAP — kernel did not build"
+            exit 1
+          fi
+          if grep -q "ksu_handle_execve" "$SYSMAP"; then
+            echo "KSU symbols confirmed in System.map — driver compiled successfully"
+          else
+            echo "ERROR: KSU symbols NOT found in System.map — driver was not compiled into kernel!"
+            echo "Manual hook check likely failed. Verify reboot.c patch and kernel/reboot.c content:"
+            grep -n "ksu_handle_sys_reboot" kernel/reboot.c || echo "  ksu_handle_sys_reboot NOT in reboot.c"
+            exit 1
+          fi
 
       - name: "❤️ Pack AnyKernel3.zip"
         if: ${{ env.useAnykernel == 'true' }}
