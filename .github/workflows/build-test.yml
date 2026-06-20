@@ -248,24 +248,54 @@ jobs:
         working-directory: ${{ env.KERNEL_NAME }}
         if: ${{ env.withRoot == 'ksun' && env.withSUSFS == 'true' }}
         run: |
-          if [ -f fs/susfs.c ]; then
-            echo "SUSFS already integrated in kernel source — skipping patching"
-          else
-            git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu -b kernel-4.14 susfs_tmp
-            cp susfs_tmp/kernel_patches/fs/* fs/
-            cp -r susfs_tmp/kernel_patches/include/* include/
-            patch -p1 < susfs_tmp/kernel_patches/50_add_susfs_in_kernel-4.14.patch || true
-            if [ -f fs/proc/cmdline.c.rej ]; then
-              echo "Applying cmdline.c SUSFS patch manually..."
-              python3 ${{ github.workspace }}/scripts/patch_cmdline_susfs.py
-              rm -f fs/proc/cmdline.c.rej
-            fi
-            if [ -f susfs_tmp/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ]; then
-              patch -p1 < susfs_tmp/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
-            fi
-            rm -rf susfs_tmp
-            echo "SUSFS patches applied from gitlab.com/simonpunk/susfs4ksu (kernel-4.14)"
-          fi
+          git clone --depth=1 https://github.com/cvnertnc/susfs4ksu-begonia-old -b dev susfs_tmp
+
+          # Add KSU hooks to kernel source (exec.c, input.c, namespace.c, etc.)
+          patch -p1 < susfs_tmp/kernel_patches/0001-fs-implement-KernelSU.patch
+
+          # Copy SUSFS source files into kernel tree
+          cp susfs_tmp/kernel_patches/fs/susfs.c fs/
+          cp susfs_tmp/kernel_patches/fs/sus_su.c fs/
+          cp -r susfs_tmp/kernel_patches/include/linux/. include/linux/
+
+          # Apply SUSFS integration to kernel (Makefile, dcache, namei, overlayfs, proc, etc.)
+          patch -p1 < susfs_tmp/kernel_patches/0002-fs-Implement-susfs-v1.5.3.patch || true
+
+          # Apply SUSFS support to KernelSU-Next driver (non-GKI specific)
+          patch -d KernelSU-Next -p1 < susfs_tmp/kernel_patches/0001-KernelSU-Next-Implement-susfs-v1.5.3-plus-non-gki.patch
+
+          rm -rf susfs_tmp
+
+          # Verify KSU exec hook landed
+          grep -q "ksu_handle_execve" fs/exec.c && echo "exec.c hook: OK" || echo "WARNING: exec.c hook missing"
+
+      - name: "⚙️ Append KSU and SUSFS configs to defconfig"
+        working-directory: ${{ env.KERNEL_NAME }}
+        if: ${{ env.withRoot == 'ksun' && env.withSUSFS == 'true' }}
+        env:
+          arch: ${{ steps.generate-args.outputs.ARCH }}
+        run: |
+          DEFCONFIG="arch/${{ env.arch }}/configs/${{ env.DEFCONFIG_NAME }}"
+          echo 'CONFIG_KALLSYMS_ALL=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_WITH_KPROBES=n' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_SUS_PATH=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_SUS_MOUNT=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_SUS_KSTAT=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_TRY_UMOUNT=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_ENABLE_LOG=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y' >> "$DEFCONFIG"
+          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y' >> "$DEFCONFIG"
+          echo 'CONFIG_OVERLAY_FS=y' >> "$DEFCONFIG"
+          echo 'CONFIG_TMPFS_XATTR=y' >> "$DEFCONFIG"
 
       - name: "👍 Make defconfig"
         working-directory: ${{ env.KERNEL_NAME }}
@@ -275,27 +305,6 @@ jobs:
         run: |
           echo "PATH Variable: $PATH"
           make ${{ env.args }} ${{ env.DEFCONFIG_NAME }}
-
-      - name: "⚙️ Enable KSU and SUSFS configs"
-        working-directory: ${{ env.KERNEL_NAME }}
-        if: ${{ env.withRoot == 'ksun' && env.withSUSFS == 'true' }}
-        env:
-          args: ${{ steps.generate-args.outputs.args }}
-        run: |
-          scripts/config --file ${{ env.OUT_DIR }}/.config \
-            -e CONFIG_KSU \
-            -e CONFIG_KSU_SUSFS \
-            -e CONFIG_KSU_SUSFS_SUS_PATH \
-            -e CONFIG_KSU_SUSFS_SUS_MOUNT \
-            -e CONFIG_KSU_SUSFS_SUS_KSTAT \
-            -e CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
-            -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
-            -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
-            -e CONFIG_KSU_SUSFS_ENABLE_LOG \
-            -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            -e CONFIG_KSU_SUSFS_SUS_SU \
-            -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-          make ${{ env.args }} olddefconfig
 
       - name: "🎶 Build kernel"
         working-directory: ${{ env.KERNEL_NAME }}

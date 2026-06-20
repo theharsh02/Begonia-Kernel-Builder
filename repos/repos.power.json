@@ -6,7 +6,7 @@
       "defconfig": "begonia_user_defconfig",
       "name": "Power-KSU-Next-SUSFS",
       "repo": "https://github.com/kerjarodipp-glitch/kernel_xiaomi_mt6785_begonia_power_kernel",
-      "branch": "ksu"
+      "branch": "bka"
     },
     "withRoot": "ksun",
     "withSUSFS": true,
