@@ -224,8 +224,13 @@ jobs:
         run: |
           # Remove old KSU dirs, then install latest tagged KernelSU-Next
           rm -rf KernelSU KernelSU-Next drivers/kernelsu
-          # No argument = setup.sh auto-checkouts latest tag (passing "next" fails because that branch doesn't exist)
+          # No argument = setup.sh auto-checkouts latest tag
           curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s
+
+          # v3.2.0-legacy Kbuild requires ksu_handle_sys_reboot in kernel/reboot.c
+          # (begonia has KPROBES disabled so manual hook mode is used, which checks reboot.c)
+          python3 ${{ github.workspace }}/scripts/patch_reboot_ksu.py
+
           KSU_VERSION=$(cat KernelSU-Next/kernel/.version 2>/dev/null || cat KernelSU/kernel/.version 2>/dev/null || cat KernelSU/.version 2>/dev/null || echo "unknown")
           echo "ROOT_VERSION=KSUN-v${KSU_VERSION}" >> $GITHUB_OUTPUT
           echo "KernelSU-Next version: ${KSU_VERSION}"
