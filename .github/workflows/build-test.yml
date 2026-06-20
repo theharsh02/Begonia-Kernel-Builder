@@ -17,7 +17,6 @@ jobs:
   Set-repos:
     name: "🐂 Parse repos.json"
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'cvnertnc' && github.repository == 'cvnertnc/Begonia-Kernel-Builder'
     outputs:
       repos: ${{ steps.generate-matrix.outputs.repos }}
       builddate: ${{ steps.generate-builddate.outputs.builddate }}
@@ -38,7 +37,6 @@ jobs:
   Build-Kernel:
     name: "🐎 Build kernel"
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'cvnertnc' && github.repository == 'cvnertnc/Begonia-Kernel-Builder'
     needs:
       - Set-repos
     strategy:
@@ -216,65 +214,29 @@ jobs:
           echo "ARCH=$ARCH" >> $GITHUB_OUTPUT
           echo "args=$args" >> $GITHUB_OUTPUT
 
-      - name: "🪡 Receiving scripts"
-        id: receiving-scripts
-        working-directory: ${{ env.KERNEL_NAME }}
-        run: |
-          if [ -d "./BKB" ]; then
-            rm -rf "./BKB"
-          fi
-
-          BKB_BRANCH=dev
-
-          git clone --recursive -j $(nproc) --branch $BKB_BRANCH https://x-access-token:${{ secrets.GH_PAT }}@github.com/cvnertnc/susfs4ksu-begonia BKB
-
-      - name: "💉 APatch, SukiSU setup and [BACKPORT]: ptrace"
-        id: apatch-sukisu-setup
-        working-directory: ${{ env.KERNEL_NAME }}
-        env:
-          arch: ${{ steps.generate-args.outputs.ARCH }}
-          DEFCONFIG_NAME: ${{ env.DEFCONFIG_NAME }}
-          GH_PAT: ${{ secrets.GH_PAT }}
-          GITHUB_OUTPUT: ${{ github.output_path }}
-        run: |
-          BKB_YML=test
-          chmod +x BKB/kernel_patches/bkb/$BKB_YML/apatch_sukisu_setup.sh
-          ./BKB/kernel_patches/bkb/$BKB_YML/apatch_sukisu_setup.sh
-
-      - name: "😋 Integrate KernelSU or KernelSU-Next"
+      - name: "😋 Integrate KernelSU-Next"
         id: integrate-kernelsu-next
         working-directory: ${{ env.KERNEL_NAME }}
-        if: ${{ env.withRoot == 'ksu' || env.withRoot == 'sukisu' || env.withRoot == 'ksun' }}
-        env:
-          arch: ${{ steps.generate-args.outputs.ARCH }}
-          DEFCONFIG_NAME: ${{ env.DEFCONFIG_NAME }}
-          GH_PAT: ${{ secrets.GH_PAT }}
-          GITHUB_OUTPUT: ${{ github.output_path }}
-          withRoot: ${{ env.withRoot }}
-          withKPM: ${{ env.withKPM }}
-          KNAME: ${{ env.KNAME }}
+        if: ${{ env.withRoot == 'ksun' }}
         run: |
-          BKB_YML=test
-          chmod +x BKB/kernel_patches/bkb/$BKB_YML/integrate_kernelsu.sh
-          ./BKB/kernel_patches/bkb/$BKB_YML/integrate_kernelsu.sh
+          curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          KSU_VERSION=$(cat KernelSU/.version 2>/dev/null || echo "unknown")
+          echo "ROOT_VERSION=KSUN-v${KSU_VERSION}" >> $GITHUB_OUTPUT
+          echo "✅ KernelSU-Next version: ${KSU_VERSION}"
 
       - name: "🥷 Add SUSFS patches"
-        id: add-susfs-patches
         working-directory: ${{ env.KERNEL_NAME }}
-        if: ${{ (env.withRoot == 'ksu' || env.withRoot == 'sukisu' || env.withRoot == 'ksun') && env.withSUSFS == 'true' }}
-        env:
-          arch: ${{ steps.generate-args.outputs.ARCH }}
-          DEFCONFIG_NAME: ${{ env.DEFCONFIG_NAME }}
-          GH_PAT: ${{ secrets.GH_PAT }}
-          GITHUB_OUTPUT: ${{ github.output_path }}
-          withRoot: ${{ env.withRoot }}
-          withSUSFS: ${{ env.withSUSFS }}
-          whichSUSFS: ${{ matrix.repos.whichSUSFS }}
-          KNAME: ${{ env.KNAME }}
+        if: ${{ env.withRoot == 'ksun' && env.withSUSFS == 'true' }}
         run: |
-          BKB_YML=test
-          chmod +x BKB/kernel_patches/bkb/$BKB_YML/add_susfs_patches.sh
-          ./BKB/kernel_patches/bkb/$BKB_YML/add_susfs_patches.sh
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu -b kernel-4.14 susfs_tmp
+          cp susfs_tmp/kernel_patches/fs/* fs/
+          cp -r susfs_tmp/kernel_patches/include/* include/
+          patch -p1 < susfs_tmp/kernel_patches/50_add_susfs_in_kernel-4.14.patch
+          if [ -f susfs_tmp/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ]; then
+            patch -p1 < susfs_tmp/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          fi
+          rm -rf susfs_tmp
+          echo "✅ SUSFS patches applied from gitlab.com/simonpunk/susfs4ksu (kernel-4.14)"
 
       - name: "👍 Make defconfig"
         working-directory: ${{ env.KERNEL_NAME }}
@@ -285,6 +247,26 @@ jobs:
           echo "PATH Variable: $PATH"
           make ${{ env.args }} ${{ env.DEFCONFIG_NAME }}
 
+      - name: "⚙️ Enable KSU and SUSFS configs"
+        working-directory: ${{ env.KERNEL_NAME }}
+        if: ${{ env.withRoot == 'ksun' && env.withSUSFS == 'true' }}
+        env:
+          args: ${{ steps.generate-args.outputs.args }}
+        run: |
+          scripts/config --file ${{ env.OUT_DIR }}/.config \
+            -e CONFIG_KSU \
+            -e CONFIG_KSU_SUSFS \
+            -e CONFIG_KSU_SUSFS_SUS_PATH \
+            -e CONFIG_KSU_SUSFS_SUS_MOUNT \
+            -e CONFIG_KSU_SUSFS_SUS_KSTAT \
+            -e CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
+            -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
+            -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
+            -e CONFIG_KSU_SUSFS_ENABLE_LOG \
+            -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+            -e CONFIG_KSU_SUSFS_SUS_SU
+          make ${{ env.args }} olddefconfig
+
       - name: "🎶 Build kernel"
         working-directory: ${{ env.KERNEL_NAME }}
         env:
@@ -292,18 +274,6 @@ jobs:
         run: |
           echo "PATH Variable: $PATH"
           make ${{ env.args }}
-
-      - name: "☯️ KPM Injection"
-        id: kpm-inject
-        working-directory: ${{ env.KERNEL_NAME }}
-        if: ${{ env.withRoot == 'sukisu' && env.withKPM == 'true' }}
-        env:
-          arch: ${{ steps.generate-args.outputs.ARCH }}
-          OUT_DIR: ${{ env.OUT_DIR }}
-        run: |
-          BKB_YML=test
-          chmod +x BKB/kernel_patches/bkb/$BKB_YML/kpm_injection.sh
-          ./BKB/kernel_patches/bkb/$BKB_YML/kpm_injection.sh
 
       - name: "❤️ Pack AnyKernel3.zip"
         if: ${{ env.useAnykernel == 'true' }}
