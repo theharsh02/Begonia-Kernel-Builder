@@ -222,7 +222,7 @@ jobs:
           curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
           KSU_VERSION=$(cat KernelSU/.version 2>/dev/null || echo "unknown")
           echo "ROOT_VERSION=KSUN-v${KSU_VERSION}" >> $GITHUB_OUTPUT
-          echo "✅ KernelSU-Next version: ${KSU_VERSION}"
+          echo "KernelSU-Next version: ${KSU_VERSION}"
 
       - name: "🥷 Add SUSFS patches"
         working-directory: ${{ env.KERNEL_NAME }}
@@ -231,12 +231,17 @@ jobs:
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu -b kernel-4.14 susfs_tmp
           cp susfs_tmp/kernel_patches/fs/* fs/
           cp -r susfs_tmp/kernel_patches/include/* include/
-          patch -p1 < susfs_tmp/kernel_patches/50_add_susfs_in_kernel-4.14.patch
+          patch -p1 < susfs_tmp/kernel_patches/50_add_susfs_in_kernel-4.14.patch || true
+          if [ -f fs/proc/cmdline.c.rej ]; then
+            echo "Applying cmdline.c SUSFS patch manually..."
+            python3 ${{ github.workspace }}/scripts/patch_cmdline_susfs.py
+            rm -f fs/proc/cmdline.c.rej
+          fi
           if [ -f susfs_tmp/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ]; then
-            patch -p1 < susfs_tmp/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+            patch -p1 < susfs_tmp/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
           fi
           rm -rf susfs_tmp
-          echo "✅ SUSFS patches applied from gitlab.com/simonpunk/susfs4ksu (kernel-4.14)"
+          echo "SUSFS patches applied from gitlab.com/simonpunk/susfs4ksu (kernel-4.14)"
 
       - name: "👍 Make defconfig"
         working-directory: ${{ env.KERNEL_NAME }}
@@ -264,7 +269,8 @@ jobs:
             -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
             -e CONFIG_KSU_SUSFS_ENABLE_LOG \
             -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            -e CONFIG_KSU_SUSFS_SUS_SU
+            -e CONFIG_KSU_SUSFS_SUS_SU \
+            -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
           make ${{ env.args }} olddefconfig
 
       - name: "🎶 Build kernel"
