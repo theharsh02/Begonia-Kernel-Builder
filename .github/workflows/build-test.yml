@@ -250,25 +250,29 @@ jobs:
         working-directory: ${{ env.KERNEL_NAME }}
         if: ${{ env.withRoot == 'ksun' && env.withSUSFS == 'true' }}
         run: |
-          git clone --depth=1 https://github.com/cvnertnc/susfs4ksu-begonia-old -b dev susfs_tmp
+          # Step 1: KSU hooks in kernel source (exec.c, input.c, namespace.c, open.c, etc.)
+          # Also adds can_umount + path_umount to namespace.c (Kbuild then skips re-injecting them)
+          git clone --depth=1 https://github.com/cvnertnc/susfs4ksu-begonia-old -b dev ksu_tmp
+          patch -p1 < ksu_tmp/kernel_patches/0001-fs-implement-KernelSU.patch
+          rm -rf ksu_tmp
 
-          # Add KSU hooks to kernel source (exec.c, input.c, namespace.c, etc.)
-          patch -p1 < susfs_tmp/kernel_patches/0001-fs-implement-KernelSU.patch
+          # Step 2: SUSFS source + headers from simonpunk kernel-4.14 branch.
+          # CRITICAL: simonpunk's susfs_def.h defines DEFAULT_SUS_MNT_ID/GROUP_ID constants
+          # that cvnertnc's outdated susfs_def.h was missing — causing build failure.
+          SBASE="https://gitlab.com/simonpunk/susfs4ksu/-/raw/kernel-4.14/kernel_patches"
+          curl -fsSL "${SBASE}/fs/susfs.c"                   -o fs/susfs.c
+          curl -fsSL "${SBASE}/fs/sus_su.c"                  -o fs/sus_su.c
+          curl -fsSL "${SBASE}/include/linux/susfs.h"        -o include/linux/susfs.h
+          curl -fsSL "${SBASE}/include/linux/susfs_def.h"    -o include/linux/susfs_def.h
+          curl -fsSL "${SBASE}/include/linux/sus_su.h"       -o include/linux/sus_su.h
 
-          # Copy SUSFS source files into kernel tree
-          cp susfs_tmp/kernel_patches/fs/susfs.c fs/
-          cp susfs_tmp/kernel_patches/fs/sus_su.c fs/
-          cp -r susfs_tmp/kernel_patches/include/linux/. include/linux/
+          # Step 3: Apply SUSFS kernel integration patch (4.14-specific).
+          # Uses #include <linux/susfs_def.h> for constants — does NOT redefine can_umount/path_umount.
+          # Apply after KSU hooks so fuzz handles any line-offset shifts.
+          curl -fsSL "${SBASE}/50_add_susfs_in_kernel-4.14.patch" | patch -p1 --fuzz=3 || true
 
-          # Apply SUSFS integration to kernel (Makefile, dcache, namei, overlayfs, proc, etc.)
-          patch -p1 < susfs_tmp/kernel_patches/0002-fs-Implement-susfs-v1.5.3.patch || true
+          # v3.1.0-legacy-susfs already has SUSFS integrated in the driver — no driver patch needed.
 
-          # v3.1.0-legacy-susfs already has SUSFS integrated in the driver — skip driver patch.
-          # (0001-KernelSU-Next-Implement-susfs-v1.5.3-plus-non-gki.patch is not needed)
-
-          rm -rf susfs_tmp
-
-          # Verify KSU exec hook landed
           grep -q "ksu_handle_execve" fs/exec.c && echo "exec.c hook: OK" || echo "WARNING: exec.c hook missing"
 
       - name: "⚙️ Append KSU and SUSFS configs to defconfig"
