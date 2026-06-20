@@ -60,6 +60,9 @@ jobs:
       release: ${{ matrix.repos.AnyKernel3.release }}
 
     steps:
+      - name: "😄 Checkout"
+        uses: actions/checkout@v3
+
       - name: "🟣 Set Kernel Variables"
         run: |
           echo "KERNEL_NAME=${{ matrix.repos.kernelSource.name }}" >> $GITHUB_ENV
