@@ -222,27 +222,29 @@ jobs:
         working-directory: ${{ env.KERNEL_NAME }}
         if: ${{ env.withRoot == 'ksun' }}
         run: |
-          # Fix P5: remove stale symlink + old dirs before setup
+          # Remove stale symlink + old dirs before setup
           rm -rf KernelSU KernelSU-Next drivers/kernelsu
 
           # Run setup.sh (clones KernelSU-Next/KernelSU-Next, wires Makefile/Kconfig)
           curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s
 
-          # Fix P1: setup.sh with no arg picks v3.2.0 (non-legacy/GKI) via git describe.
-          # We need the -legacy tag for 4.14 non-GKI kernels. Find and checkout latest -legacy tag.
-          LATEST_LEGACY=$(git -C KernelSU-Next tag | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-legacy$' | sort -V | tail -1)
-          echo "Switching KernelSU-Next to legacy tag: ${LATEST_LEGACY}"
-          git -C KernelSU-Next checkout "$LATEST_LEGACY"
+          # Use v3.1.0-legacy-susfs: flat file structure compatible with SUSFS patches,
+          # and SUSFS already integrated in the driver (no separate driver patch needed).
+          # v3.2.0-legacy restructured driver into subdirs — incompatible with available patches.
+          KSU_TAG="v3.1.0-legacy-susfs"
+          echo "Switching KernelSU-Next to tag: ${KSU_TAG}"
+          git -C KernelSU-Next fetch --unshallow 2>/dev/null || true
+          git -C KernelSU-Next checkout "$KSU_TAG"
 
-          # Fix P3: v*-legacy Kbuild checks for ksu_handle_sys_reboot in kernel/reboot.c.
-          # begonia has CONFIG_KPROBES=n so manual hook mode is active and this check is mandatory.
+          # Kbuild checks for ksu_handle_sys_reboot in kernel/reboot.c when KPROBES=n (manual hook mode).
+          # begonia has CONFIG_KPROBES=n so this check is mandatory.
           python3 ${{ github.workspace }}/scripts/patch_reboot_ksu.py
 
-          # Fix P2: .version file does not exist — version is computed from git commit count at Kbuild time.
+          # Version formula for v3.1.0-legacy-susfs Kbuild: 30000 + rev-count + 118
           KSU_GIT_COUNT=$(git -C KernelSU-Next rev-list --count HEAD 2>/dev/null || echo "0")
-          KSU_VERSION=$((30000 + KSU_GIT_COUNT + 150))
+          KSU_VERSION=$((30000 + KSU_GIT_COUNT + 118))
           echo "ROOT_VERSION=KSUN-v${KSU_VERSION}" >> $GITHUB_OUTPUT
-          echo "KernelSU-Next tag: ${LATEST_LEGACY} | computed version: ${KSU_VERSION}"
+          echo "KernelSU-Next tag: ${KSU_TAG} | computed version: ${KSU_VERSION}"
 
       - name: "🥷 Add SUSFS patches"
         working-directory: ${{ env.KERNEL_NAME }}
@@ -261,8 +263,8 @@ jobs:
           # Apply SUSFS integration to kernel (Makefile, dcache, namei, overlayfs, proc, etc.)
           patch -p1 < susfs_tmp/kernel_patches/0002-fs-Implement-susfs-v1.5.3.patch || true
 
-          # Apply SUSFS support to KernelSU-Next driver (non-GKI specific)
-          patch -d KernelSU-Next -p1 < susfs_tmp/kernel_patches/0001-KernelSU-Next-Implement-susfs-v1.5.3-plus-non-gki.patch
+          # v3.1.0-legacy-susfs already has SUSFS integrated in the driver — skip driver patch.
+          # (0001-KernelSU-Next-Implement-susfs-v1.5.3-plus-non-gki.patch is not needed)
 
           rm -rf susfs_tmp
 
@@ -278,22 +280,16 @@ jobs:
           DEFCONFIG="arch/${{ env.arch }}/configs/${{ env.DEFCONFIG_NAME }}"
           echo 'CONFIG_KALLSYMS_ALL=y' >> "$DEFCONFIG"
           echo 'CONFIG_KSU=y' >> "$DEFCONFIG"
-          echo 'CONFIG_KSU_WITH_KPROBES=n' >> "$DEFCONFIG"
           echo 'CONFIG_KSU_SUSFS=y' >> "$DEFCONFIG"
-          echo 'CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y' >> "$DEFCONFIG"
           echo 'CONFIG_KSU_SUSFS_SUS_PATH=y' >> "$DEFCONFIG"
           echo 'CONFIG_KSU_SUSFS_SUS_MOUNT=y' >> "$DEFCONFIG"
           echo 'CONFIG_KSU_SUSFS_SUS_KSTAT=y' >> "$DEFCONFIG"
-          echo 'CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y' >> "$DEFCONFIG"
           echo 'CONFIG_KSU_SUSFS_TRY_UMOUNT=y' >> "$DEFCONFIG"
           echo 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y' >> "$DEFCONFIG"
           echo 'CONFIG_KSU_SUSFS_ENABLE_LOG=y' >> "$DEFCONFIG"
           echo 'CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y' >> "$DEFCONFIG"
           echo 'CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y' >> "$DEFCONFIG"
           echo 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y' >> "$DEFCONFIG"
-          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y' >> "$DEFCONFIG"
-          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y' >> "$DEFCONFIG"
-          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y' >> "$DEFCONFIG"
           echo 'CONFIG_OVERLAY_FS=y' >> "$DEFCONFIG"
           echo 'CONFIG_TMPFS_XATTR=y' >> "$DEFCONFIG"
 
