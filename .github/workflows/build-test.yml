@@ -222,8 +222,10 @@ jobs:
         working-directory: ${{ env.KERNEL_NAME }}
         if: ${{ env.withRoot == 'ksun' }}
         run: |
+          # Remove old KSU from ksu branch, then install latest KernelSU-Next
+          rm -rf KernelSU drivers/kernelsu
           curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s next
-          KSU_VERSION=$(cat KernelSU/.version 2>/dev/null || echo "unknown")
+          KSU_VERSION=$(cat KernelSU/kernel/.version 2>/dev/null || cat KernelSU/.version 2>/dev/null || echo "unknown")
           echo "ROOT_VERSION=KSUN-v${KSU_VERSION}" >> $GITHUB_OUTPUT
           echo "KernelSU-Next version: ${KSU_VERSION}"
 
