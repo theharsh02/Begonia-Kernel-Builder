@@ -251,9 +251,9 @@ jobs:
         if: ${{ env.withRoot == 'ksun' && env.withSUSFS == 'true' }}
         run: |
           # Step 1: KSU hooks in kernel source (exec.c, input.c, namespace.c, open.c, etc.)
-          # Also adds can_umount + path_umount to namespace.c (Kbuild then skips re-injecting them)
+          # bka kernel already has can_umount + path_umount in namespace.c — exclude it to avoid redefinition
           git clone --depth=1 https://github.com/cvnertnc/susfs4ksu-begonia-old -b dev ksu_tmp
-          patch -p1 < ksu_tmp/kernel_patches/0001-fs-implement-KernelSU.patch
+          patch -p1 --exclude="fs/namespace.c" < ksu_tmp/kernel_patches/0001-fs-implement-KernelSU.patch
           rm -rf ksu_tmp
 
           # Step 2: SUSFS source + headers from simonpunk kernel-4.14 branch.
